@@ -2576,6 +2576,16 @@ class L10n {
       args: [],
     );
   }
+
+  /// `Tweets from All profiles`
+  String get browsingTweets {
+    return Intl.message(
+      'Browsing Tweets',
+      name: 'browsingTweets',
+      desc: '',
+      args: [],
+    );
+  }
 }
 
 class AppLocalizationDelegate extends LocalizationsDelegate<L10n> {
