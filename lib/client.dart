@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
-
+import 'dart:ffi';
+import 'dart:io';
 import 'package:dart_twitter_api/src/utils/date_utils.dart';
 import 'package:dart_twitter_api/twitter_api.dart';
 import 'package:faker/faker.dart';
@@ -32,6 +33,7 @@ class _FritterTwitterClient extends TwitterClient {
   _FritterTwitterClient() : super(consumerKey: '', consumerSecret: '', token: '', secret: '');
 
   static Object? _token;
+  static Map<dynamic,dynamic>? _authHeader;
   static int _expiresAt = -1;
   static int _tokenLimit = -1;
   static int _tokenRemaining = -1;
@@ -45,6 +47,37 @@ class _FritterTwitterClient extends TwitterClient {
         return Future.error(HttpException(response));
       }
     });
+  }
+
+
+  static Future<Object> getTokenWebFlow() async {
+    if (_authHeader != null) {
+      // If we don't have an expiry or limit, it's probably because we haven't made a request yet, so assume they're OK
+      if (_expiresAt == -1 && _tokenLimit == -1 && _tokenRemaining == -1) {
+        // TODO: Null safety with concurrent threads
+        return _authHeader!;
+      }
+    }
+    // Check if the token we have hasn't expired yet
+    if (DateTime.now().millisecondsSinceEpoch < _expiresAt) {
+      // Check if the token we have still has usages remaining
+      if (_tokenRemaining < _tokenLimit) {
+        // TODO: Null safety with concurrent threads
+        return _authHeader!;
+      }
+    }
+    // Otherwise, fetch a new token
+    _authHeader = null;
+    _tokenLimit = -1;
+    _tokenRemaining = -1;
+    _expiresAt = -1;
+
+    log.info('Refreshing the Twitter token');
+
+    await WebLoginFlow.GetAuthHeader();
+        return _authHeader!;
+
+
   }
 
   static Future<Object> getToken() async {
@@ -91,12 +124,13 @@ class _FritterTwitterClient extends TwitterClient {
   }
 
   static Future<http.Response> fetch(Uri uri, {Map<String, String>? headers}) async {
-    log.info('Fetching $uri');
 
+    log.info('Fetching $uri');
+    var authHeader=await WebLoginFlow.GetAuthHeader();
     var response = await http.get(uri, headers: {
-      ...?headers,
-      'authorization': _bearerToken,
-      'x-guest-token': (await getToken()).toString(),
+      ...?headers,...?authHeader,
+      //'authorization': _bearerToken,
+      //'x-guest-token': (await getToken()).toString(),
       'x-twitter-active-user': 'yes',
       'user-agent': faker.internet.userAgent()
     });
@@ -118,7 +152,286 @@ class _FritterTwitterClient extends TwitterClient {
     return response;
   }
 }
+ class WebLoginFlow {
+  static String _bearerToken ="Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
+  static http.Client client =http.Client();
+  static List<String> cookies = [];
+  static var mainHeader = {
+    'user-agent':
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
+    // "Pragma": "no-cache",
+    "Cache-Control": "no-cache"
+    // "If-Modified-Since": "Sat, 1 Jan 2000 00:00:00 GMT",
+  };
+  static Map<String,String>? authHeader;
+  static var _tokenLimit = -1;
+  static var _tokenRemaining = -1;
+  static var _expiresAt = -1;
 
+  static var gtToken,flowToken1,flowToken2,flowTokenUserName,flowTokenPassword,auth_token,csrf_token;
+
+  static Future<void> GetGuestId() async {
+    Map<String, String>? result;
+    var request = http.Request("Get", Uri.parse('https://twitter.com/i/flow/login'))..followRedirects = false;
+    request.headers.addAll(mainHeader);
+    var response = await client.send(request);
+    var headers = response.headers;
+    if (response.statusCode == 302) {
+      response.stream.drain();
+      var responseHeader = response.headers.toString();
+      RegExpMatch? match = RegExp(r'(guest_id=.+?);').firstMatch(responseHeader);
+      var guest_id = match!.group(1).toString();
+      cookies.add(guest_id);
+    } else {
+      throw Exception("Return Status is (${response.statusCode}), it should be 302");
+    }
+  }
+
+  static Future<void> GetGT() async {
+    Map<String, String> result = new Map<String, String>();
+    var request = http.Request("Get", Uri.parse('https://twitter.com/i/flow/login'))..followRedirects = false;
+    request.headers.addAll(mainHeader);
+    request.headers.addAll({"Host": "twitter.com"});
+    request.headers.addAll({"Cookie": cookies.join(";")});
+    var response = await client.send(request);
+    if (response.statusCode == 200) {
+      final stringData = await response.stream.transform(utf8.decoder).join();
+      RegExpMatch? match = RegExp(r'(gt=(.+?));').firstMatch(stringData);
+      gtToken = match!.group(2).toString();
+      var gtToken_cookie = match!.group(1).toString();
+      cookies.add(gtToken_cookie);
+    } else
+      throw Exception("Return Status is (${response.statusCode}), it should be 200");
+  }
+
+  static Future<void> GetFlowToken1() async {
+    Map<String, String> result = new Map<String, String>();
+    var body = {
+      "input_flow_data": {
+        "flow_context": {
+          "debug_overrides": {},
+          "start_location": {"location": "manual_link"}
+        }
+      },
+      "subtask_versions": {
+        "action_list": 2,
+        "alert_dialog": 1,
+        "app_download_cta": 1,
+        "check_logged_in_account": 1,
+        "choice_selection": 3,
+        "contacts_live_sync_permission_prompt": 0,
+        "cta": 7,
+        "email_verification": 2,
+        "end_flow": 1,
+        "enter_date": 1,
+        "enter_email": 2,
+        "enter_password": 5,
+        "enter_phone": 2,
+        "enter_recaptcha": 1,
+        "enter_text": 5,
+        "enter_username": 2,
+        "generic_urt": 3,
+        "in_app_notification": 1,
+        "interest_picker": 3,
+        "js_instrumentation": 1,
+        "menu_dialog": 1,
+        "notifications_permission_prompt": 2,
+        "open_account": 2,
+        "open_home_timeline": 1,
+        "open_link": 1,
+        "phone_verification": 4,
+        "privacy_options": 1,
+        "security_key": 3,
+        "select_avatar": 4,
+        "select_banner": 2,
+        "settings_list": 7,
+        "show_code": 1,
+        "sign_up": 2,
+        "sign_up_review": 4,
+        "tweet_selection_urt": 1,
+        "update_users": 1,
+        "upload_media": 1,
+        "user_recommendations_list": 4,
+        "user_recommendations_urt": 1,
+        "wait_spinner": 3,
+        "web_modal": 1
+      }
+    };
+    var request = http.Request("Post", Uri.parse('https://api.twitter.com/1.1/onboarding/task.json?flow_name=login'));
+    request.headers.addAll(mainHeader);
+    request.headers.addAll({"content-type": "application/json"});
+    request.headers.addAll({"authorization": _bearerToken});
+    request.headers.addAll({"x-guest-token": gtToken});
+    request.headers.addAll({"Cookie": cookies.join(";")});
+    request.headers.addAll({"Host": "api.twitter.com"});
+    request.body = json.encode(body);
+    var response = await client.send(request);
+    if (response.statusCode == 200) {
+      final stringData = await response.stream.transform(utf8.decoder).join();
+      final exp = RegExp(r'flow_token":"(.+?)"');
+      RegExpMatch? match = exp.firstMatch(stringData);
+      flowToken1 = match!.group(1).toString();
+      result.addAll({"flow_token1": flowToken1});
+      var responseHeader = response.headers.toString();
+      match = RegExp(r'(att=.+?);').firstMatch(responseHeader);
+      var att = match!.group(1).toString();
+      cookies.add(att);
+    } else {
+      final stringData = await response.stream.transform(utf8.decoder).join();
+      throw Exception("Return Status is (${response.statusCode}), it should be 200, Message ${stringData}");
+    }
+  }
+static Future<void> GetFlowToken2() async {
+  var body = {"flow_token": flowToken1, "subtask_inputs": []};
+  var request = http.Request("Post", Uri.parse('https://api.twitter.com/1.1/onboarding/task.json'));
+  request.headers.addAll(mainHeader);
+  request.headers.addAll({"content-type": "application/json"});
+  request.headers.addAll({"authorization": _bearerToken});
+  request.headers.addAll({"x-guest-token": gtToken});
+  request.headers.addAll({"Cookie": cookies.join(";")});
+  request.headers.addAll({"Host": "api.twitter.com"});
+  request.body = json.encode(body);
+  var response = await client.send(request);
+  if (response.statusCode == 200) {
+    final stringData = await response.stream.transform(utf8.decoder).join();
+    final exp = RegExp(r'flow_token":"(.+?)"');
+    RegExpMatch? match = exp.firstMatch(stringData);
+    flowToken2 = match!.group(1).toString();
+  }
+  else
+    throw Exception("Return Status is (${response.statusCode}), it should be 200");
+}
+  static Future<void> PassUsername(String username) async {
+    var body = {
+      "flow_token": flowToken2,
+      "subtask_inputs": [
+        {
+          "subtask_id": "LoginEnterUserIdentifierSSO",
+          "settings_list": {
+            "setting_responses": [{"key": "user_identifier", "response_data": {"text_data": {"result": username}}}],
+            "link": "next_link"
+          }
+        }
+      ]
+    };
+    var request = http.Request("Post", Uri.parse('https://api.twitter.com/1.1/onboarding/task.json'));
+    request.headers.addAll(mainHeader);
+    request.headers.addAll({"content-type": "application/json"});
+    request.headers.addAll({"authorization": _bearerToken});
+    request.headers.addAll({"x-guest-token": gtToken});
+    request.headers.addAll({"Cookie": cookies.join(";")});
+    request.headers.addAll({"Host": "api.twitter.com"});
+    request.body = json.encode(body);
+      var response = await client.send(request);
+    if (response.statusCode == 200) {
+      final stringData = await response.stream.transform(utf8.decoder).join();
+      final exp = RegExp(r'flow_token":"(.+?)"');
+      RegExpMatch? match = exp.firstMatch(stringData);
+      flowTokenUserName = match!.group(1).toString();
+    }
+    else
+      throw Exception("Return Status is (${response.statusCode}), it should be 200");
+  }
+  static Future<void> PassPassword(String password) async {
+    var body = {
+      "flow_token": flowTokenUserName,
+      "subtask_inputs": [
+        {"subtask_id": "LoginEnterPassword", "enter_password": {"password": password, "link": "next_link"}}
+      ]
+    };
+    var request = http.Request("Post", Uri.parse('https://api.twitter.com/1.1/onboarding/task.json'));
+    request.headers.addAll(mainHeader);
+    request.headers.addAll({"content-type": "application/json"});
+    request.headers.addAll({"authorization": _bearerToken});
+    request.headers.addAll({"x-guest-token": gtToken});
+    request.headers.addAll({"Cookie": cookies.join(";")});
+    request.headers.addAll({"Host": "api.twitter.com"});
+    request.body = json.encode(body);
+    var response = await client.send(request);
+
+    if (response.statusCode == 200) {
+      final stringData = await response.stream.transform(utf8.decoder).join();
+      final exp = RegExp(r'flow_token":"(.+?)"');
+      RegExpMatch? match = exp.firstMatch(stringData);
+      flowTokenPassword = match!.group(1).toString();
+    }
+  }
+  static Future<void> GetAuthTokenCsrf() async {
+    var body = {"flow_token":flowTokenPassword,"subtask_inputs":[{"subtask_id":"AccountDuplicationCheck","check_logged_in_account":{"link":"AccountDuplicationCheck_false"}}]};
+   var request = http.Request("Post", Uri.parse('https://api.twitter.com/1.1/onboarding/task.json'));
+    request.headers.addAll(mainHeader);
+    request.headers.addAll({"content-type":"application/json"});
+    request.headers.addAll({"authorization": _bearerToken});
+    request.headers.addAll({"x-guest-token": gtToken});
+    request.headers.addAll({"Cookie": cookies.join(";")});
+    request.headers.addAll({"Host": "api.twitter.com"});
+    request.body=json.encode(body);
+      var response = await client.send(request);
+
+    if (response.statusCode == 200) {
+      final stringData = await response.stream.transform(utf8.decoder).join();
+      var responseHeader=response.headers.toString();
+      final expAuthToken = RegExp(r'(auth_token=(.+?));');
+      RegExpMatch? matchAuthToken = expAuthToken.firstMatch(responseHeader);
+       auth_token=matchAuthToken!.group(2).toString();
+      var auth_token_Coookie=matchAuthToken!.group(1).toString();
+      cookies.add(auth_token_Coookie);
+      final expCt0 = RegExp(r'(ct0=(.+?));');
+      RegExpMatch? matchCt0 = expCt0.firstMatch(responseHeader);
+       csrf_token=matchCt0!.group(2).toString();
+       var csrf_token_Coookie=matchCt0!.group(1).toString();
+      cookies.add(csrf_token_Coookie);
+    }
+    else
+      throw Exception("Return Status is (${response.statusCode}), it should be 200");
+  }
+  static Future<void> BuildAuthHeader() async {
+    authHeader= Map<String,String>();
+    authHeader!.addAll({"Cookie": cookies.join(";")});
+    authHeader!.addAll({"authorization": _bearerToken});
+    authHeader!.addAll({"x-csrf-token": csrf_token});
+    //authHeader.addAll({"Host": "api.twitter.com"});
+  }
+  static Future<bool> IsTokenExpired() async {
+    if (authHeader != null) {
+      // If we don't have an expiry or limit, it's probably because we haven't made a request yet, so assume they're OK
+      if (_expiresAt == -1 && _tokenLimit == -1 && _tokenRemaining == -1) {
+        // TODO: Null safety with concurrent threads
+        return false;
+      }
+      // Check if the token we have hasn't expired yet
+      if (DateTime.now().millisecondsSinceEpoch < _expiresAt) {
+        // Check if the token we have still has usages remaining
+        if (_tokenRemaining < _tokenLimit) {
+          // TODO: Null safety with concurrent threads
+          return false;
+        } else
+          return false;
+      }
+      return false;
+    } else
+      return true;
+
+    //log.info('Refreshing the Twitter token');
+
+  }
+
+   static Future<Map<dynamic,dynamic>> GetAuthHeader() async {
+    if(!await IsTokenExpired())
+      return authHeader!;
+    await GetGuestId();
+    await GetGT();
+    await GetFlowToken1();
+    await GetFlowToken2();
+    await PassUsername("david_vodus");
+    await PassPassword("G4Y4LLsm");
+    await GetAuthTokenCsrf();
+    await BuildAuthHeader();
+    return authHeader!;
+  }
+
+  WebLoginFlow() {}
+}
 class UnknownProfileResultType with SyntheticException implements Exception {
   final String type;
   final String message;
@@ -150,6 +463,12 @@ class Twitter {
 
   static final FFCache _cache = FFCache();
 
+  static Map<String,Object> getTweetsParam=
+  {
+  "variables":"{\"userId\":\"3554497817\",\"count\":20,\"includePromotedContent\":true,\"withQuickPromoteEligibilityTweetFields\":true,\"withVoice\":true,\"withV2Timeline\":true}",
+  "features":"{\"rweb_lists_timeline_redesign_enabled\":true,\"responsive_web_graphql_exclude_directive_enabled\":true,\"verified_phone_label_enabled\":false,\"creator_subscriptions_tweet_preview_api_enabled\":true,\"responsive_web_graphql_timeline_navigation_enabled\":true,\"responsive_web_graphql_skip_user_profile_image_extensions_enabled\":false,\"tweetypie_unmention_optimization_enabled\":true,\"responsive_web_edit_tweet_api_enabled\":true,\"graphql_is_translatable_rweb_tweet_is_translatable_enabled\":true,\"view_counts_everywhere_api_enabled\":true,\"longform_notetweets_consumption_enabled\":true,\"responsive_web_twitter_article_tweet_consumption_enabled\":false,\"tweet_awards_web_tipping_enabled\":false,\"freedom_of_speech_not_reach_fetch_enabled\":true,\"standardized_nudges_misinfo\":true,\"tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled\":true,\"longform_notetweets_rich_text_read_enabled\":true,\"longform_notetweets_inline_media_enabled\":true,\"responsive_web_media_download_video_enabled\":false,\"responsive_web_enhance_cards_enabled\":false}",
+  "fieldToggles":"{\"withAuxiliaryUserLabels\":false,\"withArticleRichContentState\":false}"
+  };
   static Map<String, String> defaultParams = {
     'include_profile_interstitial_type': '1',
     'include_blocking': '1',
@@ -223,9 +542,18 @@ class Twitter {
   }
 
   static Future<Profile> getProfileByScreenName(String screenName) async {
-    var uri = Uri.https('twitter.com', '/i/api/graphql/vG3rchZtwqiwlKgUYCrTRA/UserByScreenName', {
+    var uri = Uri.https('twitter.com', '/i/api/graphql/oUZZZ8Oddwxs8Cd3iW3UEA/UserByScreenName', {
       'variables': jsonEncode({'screen_name': screenName, 'withHighlightedLabel': true, 'withSafetyModeUserFields': true, 'withSuperFollowsUserFields': true}),
-      'features': jsonEncode({'responsive_web_graphql_timeline_navigation_enabled': false})
+      'features': jsonEncode(
+        {'responsive_web_graphql_timeline_navigation_enabled': false,
+        'responsive_web_graphql_skip_user_profile_image_extensions_enabled':false,
+        'verified_phone_label_enabled':false,
+        'subscriptions_verification_info_verified_since_enabled':true,
+        'creator_subscriptions_tweet_preview_api_enabled':true,
+        'responsive_web_graphql_exclude_directive_enabled':true,
+        'hidden_profile_likes_enabled':false,
+        'highlights_tweets_tab_ui_enabled':true},
+      )
     });
 
     return _getProfile(uri);
@@ -436,9 +764,9 @@ class Twitter {
     if (cursor != null) {
       query['cursor'] = cursor;
     }
-
-    var response = await _twitterApi.client.get(Uri.https('api.twitter.com', '/2/timeline/$type/$id.json', query));
-
+    var test=getTweetsParam;
+    //var response = await _twitterApi.client.get(Uri.https('api.twitter.com', '/2/timeline/$type/$id.json', query));
+    var response = await _twitterApi.client.get(Uri.https('twitter.com', '/i/api/graphql/2GIWTr7XwadIixZDtyXd4A/UserTweets', getTweetsParam));
     var result = json.decode(response.body);
 
     return createUnconversationedChains(result, 'tweet', pinnedTweets, includeReplies == false, includeReplies);
@@ -482,12 +810,13 @@ class Twitter {
 
   static TweetStatus createUnconversationedChains(
       Map<String, dynamic> result, String tweetIndicator, List<String> pinnedTweets, bool mapToThreads, bool includeReplies) {
-    var instructions = List.from(result['timeline']['instructions']);
-    if (instructions.isEmpty || !instructions.any((e) => e.containsKey('addEntries'))) {
+    var instructions = List.from(result["data"]["user"]["result"]["timeline_v2"]['timeline']['instructions']);
+    //var instructions = List.from(result['timeline']['instructions']);
+    if (instructions.isEmpty || !instructions.any((e) => e.containsKey('type'))) {
       return TweetStatus(chains: [], cursorBottom: null, cursorTop: null);
     }
-
-    var addEntries = List.from(instructions.firstWhere((e) => e.containsKey('addEntries'))['addEntries']['entries']);
+    var addEntries = List.from(instructions.firstWhere((e) => e.containsKey('entries'))['entries']);
+   // var addEntries = List.from(instructions.firstWhere((e) => e.containsKey('addEntries'))['addEntries']['entries']);
     var repEntries = List.from(instructions.where((e) => e.containsKey('replaceEntry')));
 
     String? cursorBottom = getCursor(addEntries, repEntries, 'cursor-bottom', 'Bottom');
