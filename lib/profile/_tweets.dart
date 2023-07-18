@@ -48,7 +48,7 @@ class _ProfileTweetsState extends State<ProfileTweets> with AutomaticKeepAliveCl
 
   Future _loadTweets(String? cursor) async {
     try {
-      var result = await Twitter.getTweetsApi2(widget.user.idStr!, widget.type, widget.pinnedTweets,
+      var result = await Twitter.getTweets(widget.user.idStr!, widget.type, widget.pinnedTweets,
           cursor: cursor, count: pageSize, includeReplies: widget.includeReplies);
 
       if (!mounted) {

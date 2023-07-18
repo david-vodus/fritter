@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+//import 'dart:js_interop';
 
 import 'package:dart_twitter_api/src/utils/date_utils.dart';
 import 'package:dart_twitter_api/twitter_api.dart';
@@ -14,29 +15,26 @@ import 'package:fritter/utils/cache.dart';
 import 'package:fritter/utils/iterables.dart';
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
+import 'package:pref/pref.dart';
 import 'package:quiver/iterables.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'WebFlowAuth/webFlowAuth_model.dart';
+import 'constants.dart';
+
 const Duration _defaultTimeout = Duration(seconds: 30);
-final String _bearerToken = String.fromCharCodes(
-  base64Decode(
-    'QmVhcmVyIEFBQUFBQUFBQUFB' +
-        'QUFBQUFBQUFBQVBZWEJBQUFBQUFBQ0xYVU5EZWtNeHFhOGglMkY0MEs0bW9Va0dz' +
-        'b2MlM0RUWWZiREtiVDNqSlBDRVZuTVlxaWx' +
-        'CMjhOSGZPUHFrY2EzcWFBeEdmc3lLQ3Mwd1Jidw==',
-  ),
-);
 
 class _FritterTwitterClient extends TwitterClient {
   static final log = Logger('_FritterTwitterClient');
-
+  static var userAgentHeader = {
+    'user-agent':
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
+    // "Pragma": "no-cache",
+    "Cache-Control": "no-cache"
+    // "If-Modified-Since": "Sat, 1 Jan 2000 00:00:00 GMT",
+  };
   _FritterTwitterClient() : super(consumerKey: '', consumerSecret: '', token: '', secret: '');
 
-  static Object? _token;
-  static Map<dynamic,dynamic>? _authHeader;
-  static int _expiresAt = -1;
-  static int _tokenLimit = -1;
-  static int _tokenRemaining = -1;
 
   @override
   Future<http.Response> get(Uri uri, {Map<String, String>? headers, Duration? timeout}) {
@@ -49,85 +47,13 @@ class _FritterTwitterClient extends TwitterClient {
     });
   }
 
-
-  static Future<Object> getTokenWebFlow() async {
-    if (_authHeader != null) {
-      // If we don't have an expiry or limit, it's probably because we haven't made a request yet, so assume they're OK
-      if (_expiresAt == -1 && _tokenLimit == -1 && _tokenRemaining == -1) {
-        // TODO: Null safety with concurrent threads
-        return _authHeader!;
-      }
-    }
-    // Check if the token we have hasn't expired yet
-    if (DateTime.now().millisecondsSinceEpoch < _expiresAt) {
-      // Check if the token we have still has usages remaining
-      if (_tokenRemaining < _tokenLimit) {
-        // TODO: Null safety with concurrent threads
-        return _authHeader!;
-      }
-    }
-    // Otherwise, fetch a new token
-    _authHeader = null;
-    _tokenLimit = -1;
-    _tokenRemaining = -1;
-    _expiresAt = -1;
-
-    log.info('Refreshing the Twitter token');
-
-    await WebLoginFlow.GetAuthHeader();
-        return _authHeader!;
-
-
-  }
-
-  static Future<Object> getToken() async {
-    if (_token != null) {
-      // If we don't have an expiry or limit, it's probably because we haven't made a request yet, so assume they're OK
-      if (_expiresAt == -1 && _tokenLimit == -1 && _tokenRemaining == -1) {
-        // TODO: Null safety with concurrent threads
-        return _token!;
-      }
-
-      // Check if the token we have hasn't expired yet
-      if (DateTime.now().millisecondsSinceEpoch < _expiresAt) {
-        // Check if the token we have still has usages remaining
-        if (_tokenRemaining < _tokenLimit) {
-          // TODO: Null safety with concurrent threads
-          return _token!;
-        }
-      }
-    }
-
-    // Otherwise, fetch a new token
-    _token = null;
-    _tokenLimit = -1;
-    _tokenRemaining = -1;
-    _expiresAt = -1;
-
-    log.info('Refreshing the Twitter token');
-
-    var response = await http.post(Uri.parse('https://api.twitter.com/1.1/guest/activate.json'), headers: {
-      'authorization': _bearerToken,
-    });
-
-    if (response.statusCode == 200) {
-      var result = jsonDecode(response.body);
-      if (result.containsKey('guest_token')) {
-        _token = result['guest_token'];
-
-        return _token!;
-      }
-    }
-
-    throw Exception(
-        'Unable to refresh the token. The response (${response.statusCode}) from Twitter was: ${response.body}');
-  }
-
   static Future<http.Response> fetch(Uri uri, {Map<String, String>? headers}) async {
     log.info('Fetching $uri');
-    var authHeader=await WebLoginFlow.GetAuthHeader();
+    var prefs= await PrefServiceShared.init(prefix: 'pref_');
+    WebFlowAuthModel webFlowAuthModel=WebFlowAuthModel(prefs);
+    var authHeader=await webFlowAuthModel.GetAuthHeader(userAgentHeader);
     var response = await http.get(uri, headers: {
-      ...?headers,...?authHeader,
+      ...?headers,...?authHeader,...?userAgentHeader,
       //'authorization': _bearerToken,
       //'x-guest-token': (await getToken()).toString(),
       'x-twitter-active-user': 'yes',
@@ -143,321 +69,12 @@ class _FritterTwitterClient extends TwitterClient {
       return response;
     }
 
-    // Update our token's rate limit counters
-    _expiresAt = int.parse(headerRateLimitReset) * 1000;
-    _tokenRemaining = int.parse(headerRateLimitRemaining);
-    _tokenLimit = int.parse(headerRateLimitLimit);
+
 
     return response;
   }
 }
- class WebLoginFlow {
-  static String _bearerToken ="Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA";
-  static http.Client client =http.Client();
-  static List<String> cookies = [];
-  static var mainHeader = {
-    'user-agent':
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36",
-    // "Pragma": "no-cache",
-    "Cache-Control": "no-cache"
-    // "If-Modified-Since": "Sat, 1 Jan 2000 00:00:00 GMT",
-  };
-  static Map<String,String>? authHeader;
-  static var _tokenLimit = -1;
-  static var _tokenRemaining = -1;
-  static var _expiresAt = -1;
 
-  static var gtToken,flowToken1,flowToken2,flowTokenUserName,
-      flowTokenPassword,auth_token,csrf_token,kdt_Coookie;
-  static var prefs;
-
-  static Future<void> GetSharedPrefs() async {
-    prefs = await SharedPreferences.getInstance();
-  }
-  static Future<void> GetGuestId() async {
-    kdt_Coookie= prefs.getString("KDT_Cookie");
-    if(kdt_Coookie!=null)
-      cookies.add(kdt_Coookie!);
-    Map<String, String>? result;
-    var request = http.Request("Get", Uri.parse('https://twitter.com/i/flow/login'))..followRedirects = false;
-    request.headers.addAll(mainHeader);
-    var response = await client.send(request);
-    var headers = response.headers;
-    if (response.statusCode == 302) {
-      response.stream.drain();
-      var responseHeader = response.headers.toString();
-      RegExpMatch? match = RegExp(r'(guest_id=.+?);').firstMatch(responseHeader);
-      var guest_id = match!.group(1).toString();
-      cookies.add(guest_id);
-    } else {
-      throw Exception("Return Status is (${response.statusCode}), it should be 302");
-    }
-  }
-
-  static Future<void> GetGT() async {
-    Map<String, String> result = new Map<String, String>();
-    var request = http.Request("Get", Uri.parse('https://twitter.com/i/flow/login'))..followRedirects = false;
-    request.headers.addAll(mainHeader);
-    request.headers.addAll({"Host": "twitter.com"});
-    request.headers.addAll({"Cookie": cookies.join(";")});
-    var response = await client.send(request);
-    if (response.statusCode == 200) {
-      final stringData = await response.stream.transform(utf8.decoder).join();
-      RegExpMatch? match = RegExp(r'(gt=(.+?));').firstMatch(stringData);
-      gtToken = match!.group(2).toString();
-      var gtToken_cookie = match!.group(1).toString();
-      cookies.add(gtToken_cookie);
-    } else
-      throw Exception("Return Status is (${response.statusCode}), it should be 200");
-  }
-
-  static Future<void> GetFlowToken1() async {
-    Map<String, String> result = new Map<String, String>();
-    var body = {
-      "input_flow_data": {
-        "flow_context": {
-          "debug_overrides": {},
-          "start_location": {"location": "manual_link"}
-        }
-      },
-      "subtask_versions": {
-        "action_list": 2,
-        "alert_dialog": 1,
-        "app_download_cta": 1,
-        "check_logged_in_account": 1,
-        "choice_selection": 3,
-        "contacts_live_sync_permission_prompt": 0,
-        "cta": 7,
-        "email_verification": 2,
-        "end_flow": 1,
-        "enter_date": 1,
-        "enter_email": 2,
-        "enter_password": 5,
-        "enter_phone": 2,
-        "enter_recaptcha": 1,
-        "enter_text": 5,
-        "enter_username": 2,
-        "generic_urt": 3,
-        "in_app_notification": 1,
-        "interest_picker": 3,
-        "js_instrumentation": 1,
-        "menu_dialog": 1,
-        "notifications_permission_prompt": 2,
-        "open_account": 2,
-        "open_home_timeline": 1,
-        "open_link": 1,
-        "phone_verification": 4,
-        "privacy_options": 1,
-        "security_key": 3,
-        "select_avatar": 4,
-        "select_banner": 2,
-        "settings_list": 7,
-        "show_code": 1,
-        "sign_up": 2,
-        "sign_up_review": 4,
-        "tweet_selection_urt": 1,
-        "update_users": 1,
-        "upload_media": 1,
-        "user_recommendations_list": 4,
-        "user_recommendations_urt": 1,
-        "wait_spinner": 3,
-        "web_modal": 1
-      }
-    };
-    var request = http.Request("Post", Uri.parse('https://api.twitter.com/1.1/onboarding/task.json?flow_name=login'));
-    request.headers.addAll(mainHeader);
-    request.headers.addAll({"content-type": "application/json"});
-    request.headers.addAll({"authorization": _bearerToken});
-    request.headers.addAll({"x-guest-token": gtToken});
-    request.headers.addAll({"Cookie": cookies.join(";")});
-    request.headers.addAll({"Host": "api.twitter.com"});
-    request.body = json.encode(body);
-    var response = await client.send(request);
-    if (response.statusCode == 200) {
-      final stringData = await response.stream.transform(utf8.decoder).join();
-      final exp = RegExp(r'flow_token":"(.+?)"');
-      RegExpMatch? match = exp.firstMatch(stringData);
-      flowToken1 = match!.group(1).toString();
-      result.addAll({"flow_token1": flowToken1});
-      var responseHeader = response.headers.toString();
-      match = RegExp(r'(att=.+?);').firstMatch(responseHeader);
-      var att = match!.group(1).toString();
-      cookies.add(att);
-    } else {
-      final stringData = await response.stream.transform(utf8.decoder).join();
-      throw Exception("Return Status is (${response.statusCode}), it should be 200, Message ${stringData}");
-    }
-  }
-static Future<void> GetFlowToken2() async {
-  var body = {"flow_token": flowToken1, "subtask_inputs": []};
-  var request = http.Request("Post", Uri.parse('https://api.twitter.com/1.1/onboarding/task.json'));
-  request.headers.addAll(mainHeader);
-  request.headers.addAll({"content-type": "application/json"});
-  request.headers.addAll({"authorization": _bearerToken});
-  request.headers.addAll({"x-guest-token": gtToken});
-  request.headers.addAll({"Cookie": cookies.join(";")});
-  request.headers.addAll({"Host": "api.twitter.com"});
-  request.body = json.encode(body);
-  var response = await client.send(request);
-  if (response.statusCode == 200) {
-    final stringData = await response.stream.transform(utf8.decoder).join();
-    final exp = RegExp(r'flow_token":"(.+?)"');
-    RegExpMatch? match = exp.firstMatch(stringData);
-    flowToken2 = match!.group(1).toString();
-  }
-  else
-    throw Exception("Return Status is (${response.statusCode}), it should be 200");
-}
-  static Future<void> PassUsername(String username) async {
-    var body = {
-      "flow_token": flowToken2,
-      "subtask_inputs": [
-        {
-          "subtask_id": "LoginEnterUserIdentifierSSO",
-          "settings_list": {
-            "setting_responses": [{"key": "user_identifier", "response_data": {"text_data": {"result": username}}}],
-            "link": "next_link"
-          }
-        }
-      ]
-    };
-    var request = http.Request("Post", Uri.parse('https://api.twitter.com/1.1/onboarding/task.json'));
-    request.headers.addAll(mainHeader);
-    request.headers.addAll({"content-type": "application/json"});
-    request.headers.addAll({"authorization": _bearerToken});
-    request.headers.addAll({"x-guest-token": gtToken});
-    request.headers.addAll({"Cookie": cookies.join(";")});
-    request.headers.addAll({"Host": "api.twitter.com"});
-    request.body = json.encode(body);
-      var response = await client.send(request);
-    if (response.statusCode == 200) {
-      final stringData = await response.stream.transform(utf8.decoder).join();
-      final exp = RegExp(r'flow_token":"(.+?)"');
-      RegExpMatch? match = exp.firstMatch(stringData);
-      flowTokenUserName = match!.group(1).toString();
-    }
-    else
-      throw Exception("Return Status is (${response.statusCode}), it should be 200");
-  }
-  static Future<void> PassPassword(String password) async {
-    var body = {
-      "flow_token": flowTokenUserName,
-      "subtask_inputs": [
-        {"subtask_id": "LoginEnterPassword", "enter_password": {"password": password, "link": "next_link"}}
-      ]
-    };
-    var request = http.Request("Post", Uri.parse('https://api.twitter.com/1.1/onboarding/task.json'));
-    request.headers.addAll(mainHeader);
-    request.headers.addAll({"content-type": "application/json"});
-    request.headers.addAll({"authorization": _bearerToken});
-    request.headers.addAll({"x-guest-token": gtToken});
-    request.headers.addAll({"Cookie": cookies.join(";")});
-    request.headers.addAll({"Host": "api.twitter.com"});
-    request.body = json.encode(body);
-    var response = await client.send(request);
-
-    if (response.statusCode == 200) {
-      final stringData = await response.stream.transform(utf8.decoder).join();
-      final exp = RegExp(r'flow_token":"(.+?)"');
-      RegExpMatch? match = exp.firstMatch(stringData);
-      flowTokenPassword = match!.group(1).toString();
-    }
-  }
-  static Future<void> GetAuthTokenCsrf() async {
-    var body = {"flow_token":flowTokenPassword,"subtask_inputs":[{"subtask_id":"AccountDuplicationCheck","check_logged_in_account":{"link":"AccountDuplicationCheck_false"}}]};
-   var request = http.Request("Post", Uri.parse('https://api.twitter.com/1.1/onboarding/task.json'));
-    request.headers.addAll(mainHeader);
-    request.headers.addAll({"content-type":"application/json"});
-    request.headers.addAll({"authorization": _bearerToken});
-    request.headers.addAll({"x-guest-token": gtToken});
-    request.headers.addAll({"Cookie": cookies.join(";")});
-    request.headers.addAll({"Host": "api.twitter.com"});
-    request.body=json.encode(body);
-
-      var response = await client.send(request);
-
-    if (response.statusCode == 200) {
-      final stringData = await response.stream.transform(utf8.decoder).join();
-      var responseHeader=response.headers.toString();
-      final expAuthToken = RegExp(r'(auth_token=(.+?));');
-      RegExpMatch? matchAuthToken = expAuthToken.firstMatch(responseHeader);
-       auth_token=matchAuthToken!.group(2).toString();
-      var auth_token_Coookie=matchAuthToken!.group(1).toString();
-      cookies.add(auth_token_Coookie);
-      final expCt0 = RegExp(r'(ct0=(.+?));');
-      RegExpMatch? matchCt0 = expCt0.firstMatch(responseHeader);
-       csrf_token=matchCt0!.group(2).toString();
-       var csrf_token_Coookie=matchCt0!.group(1).toString();
-      cookies.add(csrf_token_Coookie);
-
-      if(kdt_Coookie==null) {
-        //extract KDT cookie to authenticate unknown device and prevent twitter
-        // from sending email about New Login.
-        final expKdt = RegExp(r'(kdt=(.+?));');
-        RegExpMatch? matchKdt = expKdt.firstMatch(responseHeader);
-        kdt_Coookie = matchKdt!.group(1).toString();
-        await prefs.setString("KDT_Cookie", kdt_Coookie);
-      }
-      // final exptwid = RegExp(r'(twid="(.+?))"');
-      // RegExpMatch? matchtwid = exptwid.firstMatch(responseHeader);
-      // var twid_Coookie=matchtwid!.group(2).toString();
-      // cookies.add("twid="+twid_Coookie);
-    }
-    else
-      throw Exception("Return Status is (${response.statusCode}), it should be 200");
-  }
-  static Future<void> BuildAuthHeader() async {
-    authHeader= Map<String,String>();
-    authHeader!.addAll({"Cookie": cookies.join(";")});
-    authHeader!.addAll({"authorization": _bearerToken});
-    authHeader!.addAll({"x-csrf-token": csrf_token});
-    authHeader!.addAll(mainHeader);
-    //authHeader.addAll({"Host": "api.twitter.com"});
-  }
-  static Future<bool> IsTokenExpired() async {
-    if (authHeader != null) {
-      // If we don't have an expiry or limit, it's probably because we haven't made a request yet, so assume they're OK
-      if (_expiresAt == -1 && _tokenLimit == -1 && _tokenRemaining == -1) {
-        // TODO: Null safety with concurrent threads
-        return false;
-      }
-      // Check if the token we have hasn't expired yet
-      if (DateTime.now().millisecondsSinceEpoch < _expiresAt) {
-        // Check if the token we have still has usages remaining
-        if (_tokenRemaining < _tokenLimit) {
-          // TODO: Null safety with concurrent threads
-          return false;
-        } else
-          return false;
-      }
-      return false;
-    } else
-      return true;
-
-    //log.info('Refreshing the Twitter token');
-
-  }
-
-   static Future<Map<dynamic,dynamic>> GetAuthHeader() async {
-    if(!await IsTokenExpired())
-      return authHeader!;
-    await GetSharedPrefs();
-    await GetGuestId();
-    await GetGT();
-    await GetFlowToken1();
-    await GetFlowToken2();
-    await PassUsername("david_vodus");
-    await PassPassword("G4Y4LLsm");
-    await GetAuthTokenCsrf();
-    await BuildAuthHeader();
-    return authHeader!;
-  }
-
-  WebLoginFlow() {
-
-  }
-
-}
 class UnknownProfileResultType with SyntheticException implements Exception {
   final String type;
   final String message;
@@ -824,25 +441,7 @@ class Twitter {
   }
   static Future<TweetStatus> getTweets(String id, String type, List<String> pinnedTweets,
       {int count = 10, String? cursor, bool includeReplies = true, bool includeRetweets = true}) async {
-    var query = {
-      ...defaultParams,
-      'include_tweet_replies': includeReplies ? '1' : '0',
-      'include_want_retweets': includeRetweets ? '1' : '0', // This may not actually do anything
-      'count': count.toString(),
-    };
-
-    if (cursor != null) {
-      query['cursor'] = cursor;
-    }
-
-    var response = await _twitterApi.client.get(Uri.https('api.twitter.com', '/2/timeline/$type/$id.json', query));
-
-    var result = json.decode(response.body);
-
-    return createUnconversationedChains(result, 'tweet', pinnedTweets, includeReplies == false, includeReplies);
-  }
-  static Future<TweetStatus> getTweetsApi2(String id, String type, List<String> pinnedTweets,
-      {int count = 10, String? cursor, bool includeReplies = true, bool includeRetweets = true}) async {
+    bool showPinnedTweet=true;
     var query = {
       ...defaultParams,
       'include_tweet_replies': includeReplies ? '1' : '0',
@@ -865,8 +464,10 @@ class Twitter {
     defaultUserTweetsParam["variables"]=json.encode(variables);
     var response = await _twitterApi.client.get(Uri.https('twitter.com', '/i/api/graphql/2GIWTr7XwadIixZDtyXd4A/UserTweets', defaultUserTweetsParam));
     var result = json.decode(response.body);
-    variables['cursor'] = null;
-    return createUnconversationedChainsApi2(result, 'tweet', pinnedTweets, includeReplies == false, includeReplies);
+    //if this page is not first one on the profile page, dont add pinned tweet
+    if(variables['cursor'] != null)
+      showPinnedTweet=false;
+    return createUnconversationedChains(result, 'tweet', pinnedTweets, includeReplies == false, includeReplies,showPinnedTweet);
   }
 
   static String? getCursor(List<dynamic> addEntries, List<dynamic> repEntries, String legacyType, String type) {
@@ -905,80 +506,26 @@ class Twitter {
     return cursor;
   }
   static TweetStatus createUnconversationedChains(
-      Map<String, dynamic> result, String tweetIndicator, List<String> pinnedTweets, bool mapToThreads, bool includeReplies) {
-    var instructions = List.from(result['timeline']['instructions']);
-    if (instructions.isEmpty || !instructions.any((e) => e.containsKey('addEntries'))) {
-      return TweetStatus(chains: [], cursorBottom: null, cursorTop: null);
-    }
-
-    var addEntries = List.from(instructions.firstWhere((e) => e.containsKey('addEntries'))['addEntries']['entries']);
-    var repEntries = List.from(instructions.where((e) => e.containsKey('replaceEntry')));
-
-    String? cursorBottom = getCursor(addEntries, repEntries, 'cursor-bottom', 'Bottom');
-    String? cursorTop = getCursor(addEntries, repEntries, 'cursor-top', 'Top');
-
-    var tweets = _createTweets(tweetIndicator, result, includeReplies);
-
-    // First, get all the IDs of the tweets we need to display
-    var tweetEntries = addEntries
-        .where((e) => e['entryId'].contains(tweetIndicator))
-        .sorted((a, b) => b['sortIndex'].compareTo(a['sortIndex']))
-        .map((e) => e['content']['item']['content']['tweet']['id'])
-        .cast<String>()
-        .toList();
-
-    Map<String, List<TweetWithCard>> conversations =
-    tweets.values.where((e) => tweetEntries.contains(e.idStr)).groupBy((e) {
-      // TODO: I don't think a flag is the right way to handle this
-      if (mapToThreads) {
-        // Then group the tweets-to-display by their conversation ID
-        return e.conversationIdStr;
-      }
-
-      return e.idStr;
-    }).cast<String, List<TweetWithCard>>();
-
-    List<TweetChain> chains = [];
-
-    // Order all the conversations by newest first (assuming the ID is an incrementing key), and create a chain from them
-    for (var conversation in conversations.entries.sorted((a, b) => b.key.compareTo(a.key))) {
-      var chainTweets = conversation.value.sorted((a, b) => a.idStr!.compareTo(b.idStr!)).toList();
-
-      chains.add(TweetChain(id: conversation.key, tweets: chainTweets, isPinned: false));
-    }
-
-    // If we want to show pinned tweets, add them before the chains that we already have
-    if (pinnedTweets.isNotEmpty) {
-      for (var id in pinnedTweets) {
-        // It's possible for the pinned tweet to either not exist, or not be returned, so handle that
-        if (tweets.containsKey(id)) {
-          chains.insert(0, TweetChain(id: id, tweets: [tweets[id]!], isPinned: true));
-        }
-      }
-    }
-
-    return TweetStatus(chains: chains, cursorBottom: cursorBottom, cursorTop: cursorTop);
-  }
-  static TweetStatus createUnconversationedChainsApi2(
-      Map<String, dynamic> result, String tweetIndicator, List<String> pinnedTweets, bool mapToThreads, bool includeReplies) {
-
+      Map<String, dynamic> result, String tweetIndicator, List<String> pinnedTweets, bool mapToThreads, bool includeReplies,bool showPinnedTweet) {
     var instructions = List.from(result["data"]["user"]["result"]["timeline_v2"]['timeline']['instructions']);
     //var instructions = List.from(result['timeline']['instructions']);
     var addEntriesInstructions = instructions.firstWhereOrNull((e) => e['type'] == 'TimelineAddEntries');
     if (addEntriesInstructions == null) {
       return TweetStatus(chains: [], cursorBottom: null, cursorTop: null);
     }
-    var addPinnedTweetsInstructions =  instructions.firstWhereOrNull((e) => e['type'] == 'TimelinePinEntry');
+    var addPinnedTweetsInstructions = instructions.firstWhereOrNull((e) => e['type'] == 'TimelinePinEntry');
     var addEntries = List.from(addEntriesInstructions['entries']);
     var repEntries = List.from(instructions.where((e) => e['type'] == 'TimelineReplaceEntry'));
-    List addPinnedEntries= List<dynamic>.empty(growable: true);
-    addPinnedEntries.add(addPinnedTweetsInstructions['entry']);
+    List addPinnedEntries = List<dynamic>.empty(growable: true);
+    if (addPinnedTweetsInstructions != null) {
+        addPinnedEntries.add(addPinnedTweetsInstructions['entry'] ?? null);
+  }
 
     String? cursorBottom = getCursor(addEntries, repEntries, 'cursor-bottom', 'Bottom');
     String? cursorTop = getCursor(addEntries, repEntries, 'cursor-top', 'Top');
     var chains = createTweetChainsApi2(addEntries);
-    var debugTweets = json.encode(chains);
-    var debugTweets2 = json.encode(addEntries);
+   // var debugTweets = json.encode(chains);
+    //var debugTweets2 = json.encode(addEntries);
     var pinnedChains =createTweetChainsApi2(addPinnedEntries,true);
 
 
@@ -987,7 +534,7 @@ class Twitter {
       return  b.id!.compareTo(a.id!);});
 
     //If we want to show pinned tweets, add them before the chains that we already have
-    if (pinnedTweets.isNotEmpty) {
+    if (pinnedTweets.isNotEmpty & showPinnedTweet) {
       chains.insertAll(0, pinnedChains);
     }
     return TweetStatus(chains: chains, cursorBottom: cursorBottom, cursorTop: cursorTop);
