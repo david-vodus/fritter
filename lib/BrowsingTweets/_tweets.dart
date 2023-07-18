@@ -64,7 +64,7 @@ class _ProfilesTweetsState extends State<ProfilesTweets> with AutomaticKeepAlive
       // });
       for (var profile in widget.profiles)
         {
-          var result = await Twitter.getTweets(profile.id, widget.type, widget.pinnedTweets,
+          var result = await Twitter.getTweetsApi2(profile.id, widget.type, widget.pinnedTweets,
               cursor: cursor, count: pageSize, includeReplies: widget.includeReplies);
           chainALL.addAll(result.chains);
         }
