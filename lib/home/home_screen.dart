@@ -2,7 +2,6 @@ import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_triple/flutter_triple.dart';
-import 'package:fritter/BrowsingTweets/_list.dart';
 import 'package:fritter/constants.dart';
 import 'package:fritter/generated/l10n.dart';
 import 'package:fritter/group/group_screen.dart';
@@ -19,8 +18,6 @@ import 'package:fritter/utils/debounce.dart';
 import 'package:pref/pref.dart';
 import 'package:provider/provider.dart';
 import 'package:scroll_bottom_navigation_bar/scroll_bottom_navigation_bar.dart';
-import 'package:fritter/subscriptions/_list.dart';
-
 
 typedef NavigationTitleBuilder = String Function(BuildContext context);
 
@@ -49,7 +46,6 @@ List<Widget> createCommonAppBarActions(BuildContext context) {
 
 final List<NavigationPage> defaultHomePages = [
   NavigationPage('subscriptions', (c) => L10n.of(c).subscriptions, Icons.subscriptions),
-  NavigationPage('browsingTweets', (c) => L10n.of(c).browsingTweets, Icons.account_tree_sharp),
   NavigationPage('groups', (c) => L10n.of(c).groups, Icons.group),
   NavigationPage('trending', (c) => L10n.of(c).trending, Icons.trending_up),
   NavigationPage('saved', (c) => L10n.of(c).saved, Icons.bookmark),
@@ -85,8 +81,7 @@ class _HomeScreenState extends State<_HomeScreen> {
   void initState() {
     super.initState();
 
-    _buildPages(
-        widget.model.state);
+    _buildPages(widget.model.state);
     widget.model.observer(onState: _buildPages);
   }
 
@@ -134,8 +129,6 @@ class _HomeScreenState extends State<_HomeScreen> {
                     return TrendsScreen(scrollController: scrollController);
                   case 'saved':
                     return SavedScreen(scrollController: scrollController);
-                  case 'browsingTweets':
-                    return BrowsingTweets();
                   default:
                     return const MissingScreen();
                 }
